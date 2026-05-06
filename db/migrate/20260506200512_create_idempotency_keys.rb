@@ -3,15 +3,15 @@ class CreateIdempotencyKeys < ActiveRecord::Migration[8.1]
     create_table :idempotency_keys do |t|
       t.references :tenant, null: false, foreign_key: true
       t.references :user, null: false, foreign_key: true
-      t.string :scope
-      t.string :key
-      t.string :request_path
-      t.string :request_method
-      t.integer :status
+      t.string :scope, null: false
+      t.string :key, null: false
+      t.string :request_path, null: false
+      t.string :request_method, null: false, default: 'POST'
+      t.integer :status, null: false, default: 0
       t.integer :response_status
       t.jsonb :response_body
       t.datetime :locked_at
-      t.datetime :expires_at
+      t.datetime :expires_at, null: false
 
       t.timestamps
     end

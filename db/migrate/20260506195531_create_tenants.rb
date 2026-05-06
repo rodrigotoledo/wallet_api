@@ -1,9 +1,9 @@
 class CreateTenants < ActiveRecord::Migration[8.1]
   def change
     create_table :tenants do |t|
-      t.string :name
-      t.string :subdomain
-      t.string :status
+      t.string :name, null: false
+      t.string :subdomain, null: false
+      t.string :status, null: false, default: "active"
 
       t.timestamps
     end

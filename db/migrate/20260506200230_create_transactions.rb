@@ -4,12 +4,12 @@ class CreateTransactions < ActiveRecord::Migration[8.1]
       t.references :tenant, null: false, foreign_key: true
       t.references :account, null: false, foreign_key: true
       t.references :user, null: false, foreign_key: true
-      t.string :type
-      t.decimal :amount
-      t.string :currency
-      t.string :status
+      t.string :type, null: false
+      t.decimal :amount, null: false, precision: 15, scale: 2
+      t.string :currency, null: false, default: 'USD'
+      t.string :status, null: false, default: 'pending'
       t.string :reference
-      t.jsonb :metadata
+      t.jsonb :metadata, default: {}
 
       t.timestamps
     end

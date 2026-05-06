@@ -3,7 +3,8 @@ module Authentication
 
   included do
     before_action :require_authentication
-    helper_method :authenticated?
+    before_action :set_tenant
+    helper_method :authenticated?, :current_user, :current_tenant
   end
 
   class_methods do
@@ -14,24 +15,58 @@ module Authentication
 
   private
     def authenticated?
-      resume_session
+      resume_session || resume_jwt
     end
 
     def require_authentication
-      resume_session || request_authentication
+      authenticated? || request_authentication
     end
 
     def resume_session
       Current.session ||= find_session_by_cookie
     end
 
+    def resume_jwt
+      Current.user ||= find_user_from_jwt if jwt_token.present?
+    end
+
+    def set_tenant
+      Current.tenant = current_user.tenant if current_user
+    end
+
+    def current_user
+      Current.session&.user || Current.user
+    end
+
+    def current_tenant
+      Current.tenant
+    end
+
     def find_session_by_cookie
       Session.find_by(id: cookies.signed[:session_id]) if cookies.signed[:session_id]
     end
 
+    def jwt_token
+      request.headers['Authorization']&.split(' ')&.last
+    end
+
+    def find_user_from_jwt
+      return unless jwt_token.present?
+
+      payload = JwtService.decode(jwt_token)
+      User.find(payload["user_id"])
+    rescue => e
+      Rails.logger.warn "[Auth] JWT decode failed: #{e.message}"
+      nil
+    end
+
     def request_authentication
-      session[:return_to_after_authenticating] = request.url
-      redirect_to new_session_path
+      if request.format.json?
+        render json: { error: "unauthorized", message: "Authentication required" }, status: :unauthorized
+      else
+        session[:return_to_after_authenticating] = request.url
+        redirect_to new_session_path
+      end
     end
 
     def after_authentication_url
