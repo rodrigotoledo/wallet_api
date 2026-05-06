@@ -1,0 +1,25 @@
+# Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
+
+one:
+  tenant: one
+  user: one
+  operation_type: MyString
+  status: MyString
+  total_items: 1
+  processed_items: 1
+  failed_items: 1
+  items: 
+  results: 
+  summary: 
+
+two:
+  tenant: two
+  user: two
+  operation_type: MyString
+  status: MyString
+  total_items: 1
+  processed_items: 1
+  failed_items: 1
+  items: 
+  results: 
+  summary: 

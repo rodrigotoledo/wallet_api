@@ -1,0 +1,27 @@
+# Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
+
+one:
+  tenant: one
+  user: one
+  scope: MyString
+  key: MyString
+  request_path: MyString
+  request_method: MyString
+  status: 1
+  response_status: 1
+  response_body: 
+  locked_at: 2026-05-06 17:05:12
+  expires_at: 2026-05-06 17:05:12
+
+two:
+  tenant: two
+  user: two
+  scope: MyString
+  key: MyString
+  request_path: MyString
+  request_method: MyString
+  status: 1
+  response_status: 1
+  response_body: 
+  locked_at: 2026-05-06 17:05:12
+  expires_at: 2026-05-06 17:05:12
