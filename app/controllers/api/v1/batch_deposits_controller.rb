@@ -35,10 +35,7 @@ module Api
       end
 
       def show
-        batch = BatchOperation.find_by!(
-          id:     params[:id],
-          tenant: current_tenant
-        )
+        batch = BatchOperation.find_by!(id: params[:id])
 
         render json: BatchOperationSerializer.new(batch)
       end

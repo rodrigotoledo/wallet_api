@@ -3,8 +3,7 @@ module Api
     class TransactionsController < ApplicationController
       def index
         # acts_as_tenant já filtra automaticamente
-        transactions = Transaction
-          .where(user: current_user)
+        transactions = current_user.transactions
           .order(created_at: :desc)
           .limit(params[:limit] || 50)
 

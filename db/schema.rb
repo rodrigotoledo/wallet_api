@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_05_06_200512) do
+ActiveRecord::Schema[8.1].define(version: 2026_05_07_150822) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -89,6 +89,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_06_200512) do
     t.datetime "created_at", null: false
     t.string "currency", default: "USD", null: false
     t.jsonb "metadata", default: {}
+    t.bigint "recipient_account_id"
+    t.bigint "recipient_user_id"
     t.string "reference"
     t.integer "status", default: 0, null: false
     t.bigint "tenant_id", null: false
@@ -96,6 +98,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_06_200512) do
     t.datetime "updated_at", null: false
     t.bigint "user_id", null: false
     t.index ["account_id"], name: "index_transactions_on_account_id"
+    t.index ["recipient_account_id"], name: "index_transactions_on_recipient_account_id"
+    t.index ["recipient_user_id"], name: "index_transactions_on_recipient_user_id"
     t.index ["status"], name: "index_transactions_on_status"
     t.index ["tenant_id", "account_id"], name: "index_transactions_on_tenant_id_and_account_id"
     t.index ["tenant_id"], name: "index_transactions_on_tenant_id"
@@ -122,7 +126,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_06_200512) do
   add_foreign_key "idempotency_keys", "users"
   add_foreign_key "sessions", "users"
   add_foreign_key "transactions", "accounts"
+  add_foreign_key "transactions", "accounts", column: "recipient_account_id"
   add_foreign_key "transactions", "tenants"
   add_foreign_key "transactions", "users"
+  add_foreign_key "transactions", "users", column: "recipient_user_id"
   add_foreign_key "users", "tenants"
 end

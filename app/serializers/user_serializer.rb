@@ -3,6 +3,10 @@ class UserSerializer
 
   attributes :id, :email_address, :tenant_id, :balance, :currency
 
+  attribute :name do |user|
+    user.email_address
+  end
+
   attribute :balance do |user|
     user.account&.balance.to_f
   end

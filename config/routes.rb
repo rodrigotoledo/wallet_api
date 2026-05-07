@@ -11,6 +11,8 @@ Rails.application.routes.draw do
       resource :profile, only: :show
       resources :deposits, only: :create
       resources :withdrawals, only: :create
+      resources :transfers, only: :create
+      resources :tenant_users, only: :index
       resources :batch_deposits, only: %i[create show]
       resources :transactions, only: :index
     end
