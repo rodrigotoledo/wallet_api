@@ -12,5 +12,15 @@ module ActiveSupport
     fixtures :all
 
     # Add more helper methods to be used by all tests here...
+
+    # Helper for parsing JSONAPI responses
+    def jsonapi_response(response_body = response.body)
+      ActiveSupport::JSON.decode(response_body)["data"]["attributes"]
+    end
+
+    # Helper for parsing JSONAPI collection responses
+    def jsonapi_collection(response_body = response.body)
+      ActiveSupport::JSON.decode(response_body)["data"].map { |item| item["attributes"] }
+    end
   end
 end

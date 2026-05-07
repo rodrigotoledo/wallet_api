@@ -42,7 +42,8 @@ class Api::V1::DepositsControllerTest < ActionDispatch::IntegrationTest
     end
 
     assert_response :created
-    assert_equal "completed", JSON.parse(response.body)["data"]["attributes"]["status"]
+    body = jsonapi_response
+    assert_equal "completed", body["status"]
   end
 
   test "authenticated user can deposit to their account" do
@@ -57,7 +58,7 @@ class Api::V1::DepositsControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :created
 
-    body = JSON.parse(response.body)["data"]["attributes"]
+    body = jsonapi_response
     assert body["id"].present?
     assert_equal 25.00, body["amount"].to_f
     assert_equal 125.00, body["balance"].to_f
@@ -102,7 +103,7 @@ class Api::V1::DepositsControllerTest < ActionDispatch::IntegrationTest
       as: :json
 
     assert_response :created
-    body1 = JSON.parse(response.body)["data"]["attributes"]
+    body1 = jsonapi_response
     first_balance = @account1.reload.balance
 
     # Retry same request
@@ -117,7 +118,7 @@ class Api::V1::DepositsControllerTest < ActionDispatch::IntegrationTest
       as: :json
 
     assert_response :created
-    body2 = JSON.parse(response.body)["data"]["attributes"]
+    body2 = jsonapi_response
 
     # Should return same result
     assert_equal body1["id"], body2["id"]

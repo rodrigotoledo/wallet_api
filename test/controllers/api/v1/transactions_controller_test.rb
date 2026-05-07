@@ -32,8 +32,8 @@ class Api::V1::TransactionsControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :success
 
-    body = JSON.parse(response.body)
-    assert_equal [ newer.id.to_s, older.id.to_s ], body["data"].map { |transaction| transaction["id"] }
-    assert_equal [ "Withdrawal", "Deposit" ], body["data"].map { |transaction| transaction["attributes"]["type"] }
+    body = jsonapi_collection
+    assert_equal [ newer.id, older.id ], body.map { |transaction| transaction["id"] }
+    assert_equal [ "Withdrawal", "Deposit" ], body.map { |transaction| transaction["type"] }
   end
 end

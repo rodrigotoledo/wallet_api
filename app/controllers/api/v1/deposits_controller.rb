@@ -13,7 +13,7 @@ module Api
         )
 
         if result.success?
-          render json: TransactionSerializer.new(result.transaction),
+          render json: DepositSerializer.new(result.transaction),
                  status: :created
         else
           render json: { error: 'unprocessable_entity', details: result.errors },
