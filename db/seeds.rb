@@ -43,3 +43,15 @@ charlie_account = Account.find_or_create_by!(tenant: demo_tenant, user: charlie,
 end
 
 puts "Created demo tenant '#{demo_tenant.name}' with users: Alice ($#{alice_account.balance}), Bob ($#{bob_account.balance}), Charlie ($#{charlie_account.balance})"
+
+Tenant.all.each do |tenant|
+  3.times do |i|
+    user = User.find_or_create_by!(tenant: tenant, email_address: "user#{i + 1}@#{tenant.subdomain}.com") do |user|
+      user.password = "password123"
+    end
+
+    Account.find_or_create_by!(tenant: tenant, user: user, currency: "USD") do |account|
+      account.balance = 100.00
+    end 
+  end
+end

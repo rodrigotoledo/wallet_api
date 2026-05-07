@@ -15,10 +15,9 @@ class TransferService
   def call
     validate_transfer!
 
+    sender_transaction = nil
     ActiveRecord::Base.transaction do
-      [@sender_account, @recipient_account].sort_by(&:id).each(&:lock!)
-
-      # Check sender has sufficient funds
+      # Check sender has sufficient funds (preliminary check)
       if @sender_account.balance < @amount
         return ServiceResult.new(
           success?: false,
@@ -50,17 +49,12 @@ class TransferService
         status:             :pending,
         reference:          @reference
       )
-
-      # Update balances
-      @sender_account.decrement!(:balance, @amount)
-      @recipient_account.increment!(:balance, @amount)
-
-      # Mark both transactions as completed
-      sender_transaction.update!(status: :completed)
-      recipient_transaction.update!(status: :completed)
-
-      ServiceResult.new(success?: true, transaction: sender_transaction, errors: [])
     end
+
+    # Queue job to process the transfer asynchronously (after transaction commits)
+    TransferProcessorJob.perform_async(sender_transaction.id)
+
+    ServiceResult.new(success?: true, transaction: sender_transaction, errors: [])
   rescue ActiveRecord::RecordInvalid => e
     ServiceResult.new(success?: false, transaction: nil, errors: e.record.errors.full_messages)
   rescue ActiveRecord::RecordNotFound => e

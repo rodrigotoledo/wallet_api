@@ -10,27 +10,33 @@ class TransferServiceTest < ActiveSupport::TestCase
   end
 
   test "transfers money from sender to recipient with debit and credit records" do
-    result = TransferService.call(
-      sender: @alice,
-      recipient: @bob,
-      tenant: @tenant,
-      amount: 75,
-      currency: "USD",
-      reference: "service-transfer"
-    )
+    # Use inline mode for this test to execute the job immediately
+    Sidekiq::Testing.inline! do
+      result = TransferService.call(
+        sender: @alice,
+        recipient: @bob,
+        tenant: @tenant,
+        amount: 75,
+        currency: "USD",
+        reference: "service-transfer"
+      )
 
-    assert result.success?
-    assert_equal 925.00, @alice_account.reload.balance
-    assert_equal 575.00, @bob_account.reload.balance
+      assert result.success?
 
-    sender_transaction = result.transaction
-    recipient_transaction = Transaction.find_by!(account: @bob_account, type: "Deposit", reference: "service-transfer")
+      # Reload the transaction to get the updated status
+      sender_transaction = result.transaction.reload
 
-    assert_equal "Transfer", sender_transaction.type
-    assert_equal @bob, sender_transaction.recipient_user
-    assert_equal @bob_account, sender_transaction.recipient_account
-    assert_equal "completed", sender_transaction.status
-    assert_equal "completed", recipient_transaction.status
+      assert_equal 925.00, @alice_account.reload.balance.to_f
+      assert_equal 575.00, @bob_account.reload.balance.to_f
+
+      recipient_transaction = Transaction.find_by!(account: @bob_account, type: "Deposit", reference: "service-transfer")
+
+      assert_equal "Transfer", sender_transaction.type
+      assert_equal @bob, sender_transaction.recipient_user
+      assert_equal @bob_account, sender_transaction.recipient_account
+      assert_equal "completed", sender_transaction.status
+      assert_equal "completed", recipient_transaction.status
+    end
   end
 
   test "does not change balances when funds are insufficient" do

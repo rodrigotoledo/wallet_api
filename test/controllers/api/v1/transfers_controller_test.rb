@@ -13,42 +13,53 @@ class Api::V1::TransfersControllerTest < ActionDispatch::IntegrationTest
     initial_alice_balance = @alice_account.balance
     initial_bob_balance = @bob_account.balance
 
-    assert_difference "@alice_account.reload.balance", -50 do
-      assert_difference "@bob_account.reload.balance", 50 do
-        post api_v1_transfers_path,
-          headers: { "Authorization" => "Bearer #{JwtService.encode(@alice)}" },
-          params: {
-            transfer: {
-              recipient_id: @bob.id,
-              amount: 50,
-              currency: "USD"
-            }
-          },
-          as: :json
-      end
-    end
+    # Create transfer (should create pending transactions, balances not updated yet)
+    post api_v1_transfers_path,
+      headers: { "Authorization" => "Bearer #{JwtService.encode(@alice)}" },
+      params: {
+        transfer: {
+          recipient_id: @bob.id,
+          amount: 50,
+          currency: "USD"
+        }
+      },
+      as: :json
 
     assert_response :created
 
     body = jsonapi_response
     assert_equal "Transfer", body["type"]
     assert_equal 50, body["amount"].to_f
-    assert_equal "completed", body["status"]
-    assert_equal @alice_account.reload.balance.to_f, body["balance"]
+    assert_equal "pending", body["status"]  # Now pending until job processes
+    assert_equal initial_alice_balance.to_f, body["balance"]  # Balance not yet updated
 
     # Check recipient info
     assert_equal @bob.id, body["recipient"]["id"]
     assert_equal @bob.email_address, body["recipient"]["email"]
 
-    # Verify transfer debit and recipient deposit were created
+    # Verify transfer debit and recipient deposit were created as pending
     alice_transaction = Transaction.find_by(account: @alice_account, type: "Transfer")
     bob_transaction = Transaction.find_by(account: @bob_account, type: "Deposit")
 
     assert alice_transaction
     assert bob_transaction
+    assert_equal "pending", alice_transaction.status
+    assert_equal "pending", bob_transaction.status
+    assert_equal @bob, alice_transaction.recipient_user
+
+    # Process the transfer job
+    TransferProcessorJob.new.perform(alice_transaction.id)
+
+    # Reload data and verify balances were updated
+    @alice_account.reload
+    @bob_account.reload
+    alice_transaction.reload
+    bob_transaction.reload
+
+    assert_equal initial_alice_balance - 50, @alice_account.balance
+    assert_equal initial_bob_balance + 50, @bob_account.balance
     assert_equal "completed", alice_transaction.status
     assert_equal "completed", bob_transaction.status
-    assert_equal @bob, alice_transaction.recipient_user
   end
 
   test "fails with insufficient funds" do

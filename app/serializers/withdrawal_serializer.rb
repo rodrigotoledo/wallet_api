@@ -6,8 +6,4 @@ class WithdrawalSerializer
   attribute :balance do |withdrawal|
     withdrawal.account.balance.to_f
   end
-
-  attribute :type do |withdrawal|
-    'Withdrawal'
-  end
 end

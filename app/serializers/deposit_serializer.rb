@@ -6,8 +6,4 @@ class DepositSerializer
   attribute :balance do |deposit|
     deposit.account.balance.to_f
   end
-
-  attribute :type do |deposit|
-    'Deposit'
-  end
 end

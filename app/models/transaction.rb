@@ -1,5 +1,6 @@
 class Transaction < ApplicationRecord
   acts_as_tenant :tenant
+  include TransactionTypes
 
   belongs_to :account
   belongs_to :user
@@ -10,6 +11,4 @@ class Transaction < ApplicationRecord
 
   validates :amount, numericality: { greater_than: 0 }
   validates :type, inclusion: { in: %w[Deposit Withdrawal Transfer] }
-
-  # Transfers require recipient information - validated in Transfer model
 end

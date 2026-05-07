@@ -30,8 +30,8 @@ class WithdrawalService
         )
       end
 
-      transaction = account.transactions.create!(
-        type:      "Withdrawal",
+      transaction = Withdrawal.create!(
+        account:   account,
         tenant:    @tenant,
         user:      @user,
         amount:    @amount,
