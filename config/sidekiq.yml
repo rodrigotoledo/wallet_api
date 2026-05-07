@@ -1,0 +1,7 @@
+:concurrency: 5
+:timeout: 25
+:verbose: false
+
+:queues:
+  - [default, 5]
+  - [low_priority, 1]
