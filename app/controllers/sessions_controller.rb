@@ -8,10 +8,30 @@ class SessionsController < ApplicationController
 
   def create
     if user = User.authenticate_by(params.permit(:email_address, :password))
-      start_new_session_for user
-      redirect_to after_authentication_url
+      if request.format.json?
+        render json: {
+          token: JwtService.encode(user),
+          token_type: "Bearer",
+          expires_in: JwtService::EXPIRATION.to_i,
+          user: {
+            id: user.id,
+            email_address: user.email_address,
+            tenant_id: user.tenant_id
+          }
+        }, status: :created
+      else
+        start_new_session_for user
+        redirect_to after_authentication_url
+      end
     else
-      redirect_to new_session_path, alert: "Try another email address or password."
+      if request.format.json?
+        render json: {
+          error: "invalid_credentials",
+          message: "Try another email address or password."
+        }, status: :unauthorized
+      else
+        redirect_to new_session_path, alert: "Try another email address or password."
+      end
     end
   end
 

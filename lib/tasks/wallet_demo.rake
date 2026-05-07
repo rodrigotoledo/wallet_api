@@ -22,23 +22,29 @@ namespace :wallet do
     account = Account.find_or_create_by!(tenant: tenant, user: user, currency: "USD")
     account.update!(balance: 100.to_d) if account.balance.zero?
 
-    cookie_jar = {}
-
     print_step "Using API at #{base_url}"
     print_step "Signing in through POST /session as #{user.email_address}"
-    login_response = http_post_form(
+    login_response = http_post_json(
       base_url,
       "/session",
       {
         email_address: user.email_address,
         password: "password"
-      },
-      cookie_jar
+      }
     )
     print_response(login_response)
 
-    unless cookie_jar["session_id"]
-      abort "Login did not return a session cookie. Is #{base_url} running this Rails app?"
+    token = parse_json(login_response)["token"]
+
+    unless token
+      abort <<~MESSAGE
+        Login did not return a JWT token.
+
+        HTTP #{login_response.code}
+        Body: #{login_response.body}
+
+        Make sure #{base_url} is running this Rails app and was restarted after the JWT login changes.
+      MESSAGE
     end
 
     print_step "Authenticated deposit through POST /api/v1/deposits"
@@ -52,8 +58,8 @@ namespace :wallet do
           reference: "rake-demo-deposit"
         }
       },
-      cookie_jar,
       {
+        "Authorization" => "Bearer #{token}",
         "Idempotency-Key" => "rake-demo-deposit-#{run_id}"
       }
     )
@@ -70,8 +76,8 @@ namespace :wallet do
           reference: "rake-demo-withdrawal"
         }
       },
-      cookie_jar,
       {
+        "Authorization" => "Bearer #{token}",
         "Idempotency-Key" => "rake-demo-withdrawal-#{run_id}"
       }
     )
@@ -97,8 +103,8 @@ namespace :wallet do
           }
         ]
       },
-      cookie_jar,
       {
+        "Authorization" => "Bearer #{token}",
         "Idempotency-Key" => "rake-demo-batch-#{run_id}"
       }
     )
@@ -116,7 +122,7 @@ namespace :wallet do
     end
 
     print_step "Polling batch result through GET /api/v1/batch_deposits/#{batch_id}"
-    batch_result = poll_batch_result(base_url, batch_id, cookie_jar)
+    batch_result = poll_batch_result(base_url, batch_id, token)
     print_response(batch_result)
 
     account.reload
@@ -125,63 +131,39 @@ namespace :wallet do
     abort "Could not connect to #{base_url}. Start the server with: bin/rails server"
   end
 
-  def http_post_form(base_url, path, form, cookie_jar)
-    request = Net::HTTP::Post.new(path)
-    request.set_form_data(form)
-    request["Accept"] = "application/json"
-    attach_cookies(request, cookie_jar)
-
-    perform_request(base_url, request, cookie_jar)
-  end
-
-  def http_post_json(base_url, path, payload, cookie_jar, headers = {})
+  def http_post_json(base_url, path, payload, headers = {})
     request = Net::HTTP::Post.new(path)
     request.body = JSON.generate(payload)
     request["Accept"] = "application/json"
     request["Content-Type"] = "application/json"
     headers.each { |key, value| request[key] = value }
-    attach_cookies(request, cookie_jar)
 
-    perform_request(base_url, request, cookie_jar)
+    perform_request(base_url, request)
   end
 
-  def http_get_json(base_url, path, cookie_jar)
+  def http_get_json(base_url, path, headers = {})
     request = Net::HTTP::Get.new(path)
     request["Accept"] = "application/json"
-    attach_cookies(request, cookie_jar)
+    headers.each { |key, value| request[key] = value }
 
-    perform_request(base_url, request, cookie_jar)
+    perform_request(base_url, request)
   end
 
-  def perform_request(base_url, request, cookie_jar)
-    response = Net::HTTP.start(base_url.host, base_url.port, use_ssl: base_url.scheme == "https") do |http|
+  def perform_request(base_url, request)
+    Net::HTTP.start(base_url.host, base_url.port, use_ssl: base_url.scheme == "https") do |http|
       http.request(request)
     end
-
-    store_cookies(response, cookie_jar)
-    response
   end
 
-  def attach_cookies(request, cookie_jar)
-    return if cookie_jar.empty?
-
-    request["Cookie"] = cookie_jar.map { |name, value| "#{name}=#{value}" }.join("; ")
-  end
-
-  def store_cookies(response, cookie_jar)
-    response.get_fields("Set-Cookie")&.each do |header|
-      header.split(/,(?=\s*[^;,]+=)/).each do |cookie|
-        name, value = cookie.split(";", 2).first.split("=", 2)
-        cookie_jar[name] = value
-      end
-    end
-  end
-
-  def poll_batch_result(base_url, batch_id, cookie_jar)
+  def poll_batch_result(base_url, batch_id, token)
     response = nil
 
     10.times do
-      response = http_get_json(base_url, "/api/v1/batch_deposits/#{batch_id}", cookie_jar)
+      response = http_get_json(
+        base_url,
+        "/api/v1/batch_deposits/#{batch_id}",
+        { "Authorization" => "Bearer #{token}" }
+      )
       body = parse_json(response)
       break if %w[completed failed partial].include?(body["status"])
 
