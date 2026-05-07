@@ -9,3 +9,8 @@ two:
   name: "Tenant Two"
   subdomain: "tenant-two"
   status: "active"
+
+demo:
+  name: "Demo Tenant"
+  subdomain: "demo"
+  status: "active"

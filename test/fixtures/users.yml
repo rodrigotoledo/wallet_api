@@ -12,3 +12,21 @@ two:
   password_digest: <%= password_digest %>
   role: 0
 
+alice:
+  tenant: demo
+  email_address: "alice@demo.com"
+  password_digest: <%= password_digest %>
+  role: 0
+
+bob:
+  tenant: demo
+  email_address: "bob@demo.com"
+  password_digest: <%= password_digest %>
+  role: 0
+
+charlie:
+  tenant: demo
+  email_address: "charlie@demo.com"
+  password_digest: <%= password_digest %>
+  role: 0
+
