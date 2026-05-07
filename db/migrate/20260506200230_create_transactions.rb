@@ -7,13 +7,13 @@ class CreateTransactions < ActiveRecord::Migration[8.1]
       t.string :type, null: false
       t.decimal :amount, null: false, precision: 15, scale: 2
       t.string :currency, null: false, default: 'USD'
-      t.string :status, null: false, default: 'pending'
+      t.integer :status, null: false, default: 0
       t.string :reference
       t.jsonb :metadata, default: {}
 
       t.timestamps
     end
-    add_index :transactions, [:tenant_id, :account_id]
+    add_index :transactions, [ :tenant_id, :account_id ]
     add_index :transactions, :status
   end
 end

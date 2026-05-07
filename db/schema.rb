@@ -15,10 +15,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_06_200512) do
   enable_extension "pg_catalog.plpgsql"
 
   create_table "accounts", force: :cascade do |t|
-    t.decimal "balance"
+    t.decimal "balance", precision: 15, scale: 2, default: "0.0", null: false
     t.datetime "created_at", null: false
-    t.string "currency"
-    t.integer "lock_version"
+    t.string "currency", default: "USD", null: false
+    t.integer "lock_version", default: 0, null: false
     t.bigint "tenant_id", null: false
     t.datetime "updated_at", null: false
     t.bigint "user_id", null: false
@@ -29,15 +29,15 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_06_200512) do
 
   create_table "batch_operations", force: :cascade do |t|
     t.datetime "created_at", null: false
-    t.integer "failed_items"
-    t.jsonb "items"
-    t.string "operation_type"
-    t.integer "processed_items"
-    t.jsonb "results"
-    t.string "status"
-    t.jsonb "summary"
+    t.integer "failed_items", default: 0, null: false
+    t.jsonb "items", default: [], null: false
+    t.string "operation_type", null: false
+    t.integer "processed_items", default: 0, null: false
+    t.jsonb "results", default: [], null: false
+    t.string "status", default: "pending", null: false
+    t.jsonb "summary", default: {}, null: false
     t.bigint "tenant_id", null: false
-    t.integer "total_items"
+    t.integer "total_items", default: 0, null: false
     t.datetime "updated_at", null: false
     t.bigint "user_id", null: false
     t.index ["tenant_id"], name: "index_batch_operations_on_tenant_id"
@@ -46,15 +46,15 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_06_200512) do
 
   create_table "idempotency_keys", force: :cascade do |t|
     t.datetime "created_at", null: false
-    t.datetime "expires_at"
-    t.string "key"
+    t.datetime "expires_at", null: false
+    t.string "key", null: false
     t.datetime "locked_at"
-    t.string "request_method"
-    t.string "request_path"
+    t.string "request_method", default: "POST", null: false
+    t.string "request_path", null: false
     t.jsonb "response_body"
     t.integer "response_status"
-    t.string "scope"
-    t.integer "status"
+    t.string "scope", null: false
+    t.integer "status", default: 0, null: false
     t.bigint "tenant_id", null: false
     t.datetime "updated_at", null: false
     t.bigint "user_id", null: false
@@ -76,23 +76,23 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_06_200512) do
 
   create_table "tenants", force: :cascade do |t|
     t.datetime "created_at", null: false
-    t.string "name"
-    t.string "status"
-    t.string "subdomain"
+    t.string "name", null: false
+    t.string "status", default: "active", null: false
+    t.string "subdomain", null: false
     t.datetime "updated_at", null: false
     t.index ["subdomain"], name: "index_tenants_on_subdomain", unique: true
   end
 
   create_table "transactions", force: :cascade do |t|
     t.bigint "account_id", null: false
-    t.decimal "amount"
+    t.decimal "amount", precision: 15, scale: 2, null: false
     t.datetime "created_at", null: false
-    t.string "currency"
-    t.jsonb "metadata"
+    t.string "currency", default: "USD", null: false
+    t.jsonb "metadata", default: {}
     t.string "reference"
-    t.string "status"
+    t.integer "status", default: 0, null: false
     t.bigint "tenant_id", null: false
-    t.string "type"
+    t.string "type", null: false
     t.datetime "updated_at", null: false
     t.bigint "user_id", null: false
     t.index ["account_id"], name: "index_transactions_on_account_id"
@@ -105,9 +105,13 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_06_200512) do
   create_table "users", force: :cascade do |t|
     t.datetime "created_at", null: false
     t.string "email_address", null: false
+    t.string "group_key"
     t.string "password_digest", null: false
+    t.integer "role", default: 0, null: false
+    t.bigint "tenant_id", null: false
     t.datetime "updated_at", null: false
-    t.index ["email_address"], name: "index_users_on_email_address", unique: true
+    t.index ["tenant_id", "email_address"], name: "index_users_on_tenant_id_and_email_address", unique: true
+    t.index ["tenant_id"], name: "index_users_on_tenant_id"
   end
 
   add_foreign_key "accounts", "tenants"
@@ -120,4 +124,5 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_06_200512) do
   add_foreign_key "transactions", "accounts"
   add_foreign_key "transactions", "tenants"
   add_foreign_key "transactions", "users"
+  add_foreign_key "users", "tenants"
 end

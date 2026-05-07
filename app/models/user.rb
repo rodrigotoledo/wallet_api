@@ -9,7 +9,7 @@ class User < ApplicationRecord
   has_many :transactions
   has_many :idempotency_keys
 
-  enum role: { member: 'member', admin: 'admin' }
+  enum :role, { member: 0, admin: 1 }
 
   validates :email_address, presence: true, uniqueness: { scope: :tenant_id }
 end

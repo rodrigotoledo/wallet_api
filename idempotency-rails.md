@@ -97,20 +97,38 @@ rails new wallet_api --api --database=postgresql
 cd wallet_api
 
 # Gemfile
-gem 'redis'
-gem 'jwt'                    # autenticação
-gem 'bcrypt'                 # passwords
-gem 'sidekiq'                # background jobs (batch + cleanup)
-gem 'sidekiq-cron'           # cron jobs
+gem "redis"
+gem "jwt"                    # autenticação
+gem "bcrypt"                 # passwords
+gem "sidekiq"                # background jobs
+gem "sidekiq-cron"           # scheduled jobs
 ```
 
 ```ruby
 # config/initializers/redis.rb
 Redis.current = Redis.new(
   url:            ENV.fetch('REDIS_URL', 'redis://localhost:6379/0'),
-  connect_timeout: 1,   # fail fast se Redis estiver down
+  connect_timeout: 1,
   read_timeout:    1,
   write_timeout:   1
+)
+```
+
+```yaml
+# config/sidekiq.yml
+:concurrency: 5
+:timeout: 25
+:queues:
+  - [default, 5]
+  - [low_priority, 1]
+```
+
+```ruby
+# config/initializers/sidekiq_cron.rb
+Sidekiq::Cron::Job.create(
+  name: "Idempotency Cleanup",
+  cron: "0 3 * * *",
+  class: "IdempotencyCleanupJob"
 )
 ```
 
@@ -160,7 +178,7 @@ class CreateAccounts < ActiveRecord::Migration[7.1]
     create_table :accounts do |t|
       t.references :tenant, null: false, foreign_key: true
       t.references :user,   null: false, foreign_key: true
-      t.string  :currency, null: false, default: 'BRL'
+      t.string  :currency, null: false, default: 'USD'
       t.decimal :balance,
                 null: false,
                 default: 0,
@@ -189,7 +207,7 @@ class CreateTransactions < ActiveRecord::Migration[7.1]
                 null: false,
                 precision: 15,
                 scale: 2
-      t.string  :currency, null: false, default: 'BRL'
+      t.string  :currency, null: false, default: 'USD'
       t.string  :status,   null: false, default: 'pending'
                                          # pending / completed / failed
       t.string  :reference                # chave externa / descrição
@@ -643,7 +661,7 @@ module Api
           user:    current_user,
           tenant:  current_tenant,
           amount:  deposit_params[:amount],
-          currency: deposit_params[:currency] || 'BRL',
+          currency: deposit_params[:currency] || 'USD',
           reference: deposit_params[:reference]
         )
 
@@ -681,7 +699,7 @@ module Api
           user:    current_user,
           tenant:  current_tenant,
           amount:  withdrawal_params[:amount],
-          currency: withdrawal_params[:currency] || 'BRL',
+          currency: withdrawal_params[:currency] || 'USD',
           reference: withdrawal_params[:reference]
         )
 
@@ -705,18 +723,25 @@ module Api
 end
 ```
 
+### ServiceResult (shared)
+
+```ruby
+# app/services/service_result.rb
+ServiceResult = Struct.new(:success?, :transaction, :errors, keyword_init: true)
+```
+
 ### DepositService
 
 ```ruby
 # app/services/deposit_service.rb
 class DepositService
-  Result = Struct.new(:success?, :transaction, :errors, keyword_init: true)
+  Result = ServiceResult
 
   def self.call(...)
     new(...).call
   end
 
-  def initialize(user:, tenant:, amount:, currency: 'BRL', reference: nil)
+  def initialize(user:, tenant:, amount:, currency: "USD", reference: nil)
     @user      = user
     @tenant    = tenant
     @amount    = amount.to_d
@@ -728,14 +753,15 @@ class DepositService
     validate_amount!
 
     ActiveRecord::Base.transaction do
-      account = Account.lock('FOR UPDATE').find_by!(   # pessimistic lock
+      # Pessimistic lock: prevents concurrent deposits from reading stale balance
+      account = Account.lock!.find_by!(
         tenant: @tenant,
         user:   @user,
         currency: @currency
       )
 
       transaction = account.transactions.create!(
-        type:      'Deposit',
+        type:      "Deposit",
         tenant:    @tenant,
         user:      @user,
         amount:    @amount,
@@ -747,19 +773,19 @@ class DepositService
       account.increment!(:balance, @amount)
       transaction.update!(status: :completed)
 
-      Result.new(success?: true, transaction: transaction, errors: [])
+      ServiceResult.new(success?: true, transaction: transaction, errors: [])
     end
   rescue ActiveRecord::RecordInvalid => e
-    Result.new(success?: false, transaction: nil, errors: e.record.errors.full_messages)
+    ServiceResult.new(success?: false, transaction: nil, errors: e.record.errors.full_messages)
   rescue ArgumentError => e
-    Result.new(success?: false, transaction: nil, errors: [e.message])
+    ServiceResult.new(success?: false, transaction: nil, errors: [ e.message ])
   end
 
   private
 
   def validate_amount!
-    raise ArgumentError, 'amount must be positive' unless @amount > 0
-    raise ArgumentError, 'amount too large' if @amount > 1_000_000
+    raise ArgumentError, "amount must be positive" unless @amount > 0
+    raise ArgumentError, "amount too large" if @amount > 1_000_000
   end
 end
 ```
@@ -769,13 +795,13 @@ end
 ```ruby
 # app/services/withdrawal_service.rb
 class WithdrawalService
-  Result = Struct.new(:success?, :transaction, :errors, keyword_init: true)
+  Result = ServiceResult
 
   def self.call(...)
     new(...).call
   end
 
-  def initialize(user:, tenant:, amount:, currency: 'BRL', reference: nil)
+  def initialize(user:, tenant:, amount:, currency: "USD", reference: nil)
     @user      = user
     @tenant    = tenant
     @amount    = amount.to_d
@@ -787,24 +813,23 @@ class WithdrawalService
     validate_amount!
 
     ActiveRecord::Base.transaction do
-      # FOR UPDATE: lock pessimista — bloqueia a linha durante a transação
-      # Impede que dois withdrawals simultâneos leiam o mesmo saldo
-      account = Account.lock('FOR UPDATE').find_by!(
+      # Pessimistic lock: prevents concurrent withdrawals from reading stale balance
+      account = Account.lock!.find_by!(
         tenant:   @tenant,
         user:     @user,
         currency: @currency
       )
 
       if account.balance < @amount
-        return Result.new(
+        return ServiceResult.new(
           success?: false,
           transaction: nil,
-          errors: ['insufficient_funds']
+          errors: [ "insufficient_funds" ]
         )
       end
 
       transaction = account.transactions.create!(
-        type:      'Withdrawal',
+        type:      "Withdrawal",
         tenant:    @tenant,
         user:      @user,
         amount:    @amount,
@@ -816,18 +841,18 @@ class WithdrawalService
       account.decrement!(:balance, @amount)
       transaction.update!(status: :completed)
 
-      Result.new(success?: true, transaction: transaction, errors: [])
+      ServiceResult.new(success?: true, transaction: transaction, errors: [])
     end
   rescue ActiveRecord::RecordInvalid => e
-    Result.new(success?: false, transaction: nil, errors: e.record.errors.full_messages)
+    ServiceResult.new(success?: false, transaction: nil, errors: e.record.errors.full_messages)
   rescue ArgumentError => e
-    Result.new(success?: false, transaction: nil, errors: [e.message])
+    ServiceResult.new(success?: false, transaction: nil, errors: [ e.message ])
   end
 
   private
 
   def validate_amount!
-    raise ArgumentError, 'amount must be positive' unless @amount > 0
+    raise ArgumentError, "amount must be positive" unless @amount > 0
   end
 end
 ```
@@ -907,16 +932,18 @@ module Api
 end
 ```
 
-### BatchDepositJob
+### BatchDepositJob (Sidekiq)
 
 ```ruby
-# app/jobs/batch_deposit_job.rb
-class BatchDepositJob < ApplicationJob
-  queue_as :default
+# app/sidekiq/batch_deposit_job.rb
+class BatchDepositJob
+  include Sidekiq::Job
+
+  sidekiq_options retry: 5, dead: true
 
   def perform(batch_id)
     batch = BatchOperation.find(batch_id)
-    batch.update!(status: 'processing')
+    batch.update!(status: :processing)
 
     results      = []
     failed_count = 0
@@ -926,7 +953,6 @@ class BatchDepositJob < ApplicationJob
       results << result
       failed_count += 1 unless result[:success]
 
-      # Atualiza progresso a cada item (útil para polling)
       batch.update!(
         processed_items: index + 1,
         results:         results
@@ -940,10 +966,10 @@ class BatchDepositJob < ApplicationJob
       failed_items:  failed_count,
       results:       results,
       summary: {
-        total:     batch.total_items,
-        succeeded: batch.total_items - failed_count,
-        failed:    failed_count,
-        completed_at: Time.current.iso8601
+        total:         batch.total_items,
+        succeeded:     batch.total_items - failed_count,
+        failed:        failed_count,
+        completed_at:  Time.current.iso8601
       }
     )
   end
@@ -951,21 +977,18 @@ class BatchDepositJob < ApplicationJob
   private
 
   def process_item(batch, item, index)
-    # Idempotência por item: usa o item_key como chave de idempotência
-    # Se o job rodar duas vezes (retry do Sidekiq), não duplica
-    item_key     = item['item_key'] || "#{batch.id}-item-#{index}"
+    item_key     = item["item_key"] || "#{batch.id}-item-#{index}"
     idempotency_record_key = "batch_item:#{batch.tenant_id}:#{item_key}"
 
-    # Checa se este item já foi processado (idempotência do job)
     existing = Rails.cache.read(idempotency_record_key)
     return existing if existing
 
     result = DepositService.call(
       user:      batch.user,
       tenant:    batch.tenant,
-      amount:    item['amount'],
-      currency:  item['currency'] || 'BRL',
-      reference: item['reference']
+      amount:    item["amount"],
+      currency:  item["currency"] || "USD",
+      reference: item["reference"]
     )
 
     response = if result.success?
@@ -985,19 +1008,17 @@ class BatchDepositJob < ApplicationJob
       }
     end
 
-    # Cacheia por 24h para idempotência do job
     Rails.cache.write(idempotency_record_key, response, expires_in: 24.hours)
     response
-
   rescue => e
     Rails.logger.error "[BatchDeposit] Item #{index} failed: #{e.message}"
-    { index: index, item_key: item_key, success: false, errors: [e.message] }
+    { index: index, item_key: item_key, success: false, errors: [ e.message ] }
   end
 
   def determine_final_status(results, total, failed_count)
-    if failed_count == 0           then 'completed'
-    elsif failed_count == total    then 'failed'
-    else                                'partial'    # alguns falharam
+    if failed_count == 0           then :completed
+    elsif failed_count == total    then :failed
+    else                                :partial
     end
   end
 end
@@ -1028,21 +1049,21 @@ O `rescue ActiveRecord::RecordNotUnique` no concern garante que o "perdedor" da 
 ```
 Saldo: R$ 100,00
 
-T1:  Req A lê saldo (FOR UPDATE) → 100,00, BLOQUEIA a linha
-T2:  Req B tenta FOR UPDATE      → fica ESPERANDO o lock do A
-T3:  Req A subtrai 100,00        → saldo = 0, commit
+T1:  Req A: lock!.find_by! → BLOQUEIA a linha
+T2:  Req B: lock!.find_by! → ESPERA o lock do A
+T3:  Req A subtrai 100,00   → saldo = 0, commit
 T4:  Lock liberado
-T5:  Req B lê saldo              → 0,00
-T6:  Req B retorna 402           → insufficient_funds ✅
+T5:  Req B lê saldo         → 0,00
+T6:  Req B retorna 402      → insufficient_funds ✅
 ```
 
-O `FOR UPDATE` no `WithdrawalService` garante serialização sem precisar de locks externos.
+O `lock!` no `WithdrawalService` garante serialização sem precisar de locks externos.
 
 ### Por que NÃO usar optimistic locking aqui
 
 O `lock_version` (optimistic locking) lança `StaleObjectError` se dois processos tentam salvar a mesma linha. Isso gera retries automáticos — **perigoso** para operações financeiras onde o retry pode processar uma segunda vez.
 
-Para débitos/créditos: **sempre use pessimistic locking (`FOR UPDATE`)**.
+Para débitos/créditos: **sempre use pessimistic locking (`lock!`)**.
 
 ---
 
@@ -1080,9 +1101,11 @@ Usuário A e Usuário B do mesmo grupo enviam a mesma key → um processa, o out
 ## 11. Cleanup e expiração
 
 ```ruby
-# app/jobs/idempotency_cleanup_job.rb
-class IdempotencyCleanupJob < ApplicationJob
-  queue_as :low_priority
+# app/sidekiq/idempotency_cleanup_job.rb
+class IdempotencyCleanupJob
+  include Sidekiq::Job
+
+  sidekiq_options retry: 3
 
   def perform
     deleted = IdempotencyKey.expired.delete_all
@@ -1092,11 +1115,11 @@ end
 ```
 
 ```ruby
-# config/initializers/sidekiq_cron.rb (com sidekiq-cron)
+# config/initializers/sidekiq_cron.rb
 Sidekiq::Cron::Job.create(
-  name:  'Idempotency Cleanup',
-  cron:  '0 3 * * *',          # 3h da manhã todo dia
-  class: 'IdempotencyCleanupJob'
+  name:  "Idempotency Cleanup",
+  cron:  "0 3 * * *",          # 3am every day
+  class: "IdempotencyCleanupJob"
 )
 ```
 
@@ -1232,7 +1255,7 @@ curl http://localhost:3000/api/v1/batch_deposits/42 \
 
 ### Banco de dados
 - [ ] `UNIQUE INDEX` em `(tenant_id, scope, key)` na tabela `idempotency_keys`
-- [ ] `FOR UPDATE` nos services de débito/crédito
+- [ ] `lock!` em transações nos services de débito/crédito
 - [ ] Connection pool adequado (Puma workers × DB connections)
 
 ### Aplicação

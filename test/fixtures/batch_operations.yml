@@ -3,23 +3,23 @@
 one:
   tenant: one
   user: one
-  operation_type: MyString
-  status: MyString
+  operation_type: "deposit"
+  status: "pending"
   total_items: 1
-  processed_items: 1
-  failed_items: 1
-  items: 
-  results: 
-  summary: 
+  processed_items: 0
+  failed_items: 0
+  items: []
+  results: []
+  summary: {}
 
 two:
   tenant: two
   user: two
-  operation_type: MyString
-  status: MyString
+  operation_type: "deposit"
+  status: "pending"
   total_items: 1
-  processed_items: 1
-  failed_items: 1
-  items: 
-  results: 
-  summary: 
+  processed_items: 0
+  failed_items: 0
+  items: []
+  results: []
+  summary: {} 

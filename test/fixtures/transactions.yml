@@ -4,20 +4,20 @@ one:
   tenant: one
   account: one
   user: one
-  type: 
-  amount: 9.99
-  currency: MyString
-  status: MyString
-  reference: MyString
-  metadata: 
+  type: "Deposit"
+  amount: 50.00
+  currency: "USD"
+  status: 1
+  reference: "DEP-001"
+  metadata: {}
 
 two:
   tenant: two
   account: two
   user: two
-  type: 
-  amount: 9.99
-  currency: MyString
-  status: MyString
-  reference: MyString
-  metadata: 
+  type: "Withdrawal"
+  amount: 25.00
+  currency: "EUR"
+  status: 1
+  reference: "WTH-001"
+  metadata: {}

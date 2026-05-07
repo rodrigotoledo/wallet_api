@@ -15,6 +15,7 @@ module Idempotent
 
   def handle_idempotency
     # First action with Redis (best-effort)
+    # its the same that already exists in cache
     if (cached = read_from_redis)
       @idempotency_replayed = true
       render json: cached[:body], status: cached[:status]
@@ -24,21 +25,25 @@ module Idempotent
     # 2. Database (source of truth)
     record = find_or_initialize_idempotency_record
     @idempotency_record = record
+    return if @idempotency_record_created
 
+    # we need to keep control the status over the record, so we need to handle the possible states
     case record.status
     when 'completed'
-      write_to_redis(record)           # backfill Redis
+      write_to_redis(record)
       @idempotency_replayed = true
       render json: record.response_body, status: record.response_status
 
     when 'processing'
       # Another instance is processing — return 409
+      # without double processing, we can allow retries after a timeout to handle cases where the first request failed without updating the record
       render json: {
         error: 'conflict',
         message: 'A request with this idempotency key is already being processed.',
         idempotency_key: idempotency_key
       }, status: :conflict
 
+    # if was failed, allow to retry
     when 'failed'
       # Failed before — allow retry, reset to processing
       record.update!(
@@ -52,6 +57,7 @@ module Idempotent
     return if @idempotency_replayed
     return unless @idempotency_record
 
+    # less than code 500, will update record to completed and write in redis
     if response.status < 500
       @idempotency_record.update!(
         status:          :completed,
@@ -61,6 +67,7 @@ module Idempotent
       write_to_redis(@idempotency_record)
     else
       # 5xx error — mark as failed to allow retry
+      # and important, dont lock
       @idempotency_record.update!(
         status:    :failed,
         locked_at: nil
@@ -69,6 +76,7 @@ module Idempotent
   end
 
   def find_or_initialize_idempotency_record
+    # applying race condition and lock the transaction
     IdempotencyKey.transaction do
       record = IdempotencyKey.lock.find_by(
         tenant: current_tenant,
@@ -76,9 +84,12 @@ module Idempotent
         key:    idempotency_key
       )
 
+      # sure just have uniq index, but we need to handle the possible race
       return record if record.present?
 
-      IdempotencyKey.create!(
+      # uniq key not exist, create new one with processing status
+      @idempotency_record_created = true
+      return IdempotencyKey.create!(
         tenant:         current_tenant,
         scope:          idempotency_scope_key,
         key:            idempotency_key,
@@ -93,7 +104,7 @@ module Idempotent
   end
 
   def read_from_redis
-    raw = Redis.current.get(redis_key)
+    raw = redis_client.get(redis_key)
     JSON.parse(raw, symbolize_names: true) if raw
   rescue Redis::BaseError => e
     Rails.logger.warn "[Idempotency] Redis read failed: #{e.message} — falling back to DB"
@@ -101,7 +112,7 @@ module Idempotent
   end
 
   def write_to_redis(record)
-    Redis.current.setex(
+    redis_client.setex(
       redis_key,
       IDEMPOTENCY_TTL.to_i,
       { status: record.response_status, body: record.response_body }.to_json
@@ -112,6 +123,10 @@ module Idempotent
   end
 
   # ─── HELPERS ────────────────────────────────────────────────────────
+
+  def redis_client
+    Rails.application.config.x.redis
+  end
 
   def redis_key
     "idempotency:#{current_tenant.id}:#{idempotency_scope_key}:#{idempotency_key}"

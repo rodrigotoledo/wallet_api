@@ -1,7 +1,8 @@
 require "test_helper"
 
 class TransactionTest < ActiveSupport::TestCase
-  # test "the truth" do
-  #   assert true
-  # end
+  test "should be valid with valid attributes" do
+    transaction = transactions(:one)
+    assert transaction.valid?
+  end
 end

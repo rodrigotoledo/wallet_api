@@ -1,7 +1,8 @@
 require "test_helper"
 
 class TenantTest < ActiveSupport::TestCase
-  # test "the truth" do
-  #   assert true
-  # end
+  test "should be valid with valid attributes" do
+    tenant = tenants(:one)
+    assert tenant.valid?
+  end
 end

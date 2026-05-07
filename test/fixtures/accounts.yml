@@ -3,13 +3,13 @@
 one:
   tenant: one
   user: one
-  currency: MyString
-  balance: 9.99
-  lock_version: 1
+  currency: "USD"
+  balance: 100.00
+  lock_version: 0
 
 two:
   tenant: two
   user: two
-  currency: MyString
-  balance: 9.99
-  lock_version: 1
+  currency: "EUR"
+  balance: 200.00
+  lock_version: 0

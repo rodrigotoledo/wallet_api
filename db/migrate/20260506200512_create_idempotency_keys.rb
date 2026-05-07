@@ -16,9 +16,9 @@ class CreateIdempotencyKeys < ActiveRecord::Migration[8.1]
       t.timestamps
     end
     add_index :idempotency_keys,
-              [:tenant_id, :scope, :key],
+              [ :tenant_id, :scope, :key ],
               unique: true,
-              name: 'idx_idempotency_unique'
+              name: "idx_idempotency_unique"
 
     add_index :idempotency_keys, :expires_at
     add_index :idempotency_keys, :status
