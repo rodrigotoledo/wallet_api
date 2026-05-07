@@ -40,12 +40,7 @@ module Api
           tenant: current_tenant
         )
 
-        render json: batch.as_json(
-          only: %i[
-            id status total_items processed_items failed_items
-            results summary created_at updated_at
-          ]
-        )
+        render json: BatchOperationSerializer.new(batch)
       end
 
       private

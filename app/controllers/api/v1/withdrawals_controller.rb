@@ -13,7 +13,7 @@ module Api
         )
 
         if result.success?
-          render json: result.transaction.as_json,
+          render json: TransactionSerializer.new(result.transaction),
                  status: :created
         else
           status = result.errors.include?('insufficient_funds') ? :payment_required : :unprocessable_entity

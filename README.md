@@ -26,22 +26,41 @@ bin/rails server
 
 ## Authentication
 
-The API uses the existing Rails session login. Create or use a user with an
-account, then sign in and keep the returned cookie for API requests.
+The API uses JWT bearer tokens. Create or use a user with an account, then sign
+in and send the returned token in the `Authorization` header.
 
-Example using the test fixture user:
+Example login:
 
 ```bash
-curl -i -c tmp/cookies.txt \
+curl -s \
+  -H "Content-Type: application/json" \
   -X POST http://localhost:3000/session \
-  -d "email_address=one@example.com" \
-  -d "password=password"
+  -d '{
+    "email_address": "demo@example.com",
+    "password": "password"
+  }'
 ```
 
-Use the cookie jar on the API calls:
+Response:
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiJ9...",
+  "token_type": "Bearer",
+  "expires_in": 86400,
+  "user": {
+    "id": 1,
+    "email_address": "demo@example.com",
+    "tenant_id": 1
+  }
+}
+```
+
+Use the token on API calls:
 
 ```bash
-curl -b tmp/cookies.txt http://localhost:3000/api/v1/batch_deposits/1
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3000/api/v1/batch_deposits/1
 ```
 
 Unauthenticated JSON requests return:
@@ -75,7 +94,7 @@ X-Idempotency-Scope: group
 ## Deposit
 
 ```bash
-curl -b tmp/cookies.txt \
+curl -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: deposit-001" \
   -X POST http://localhost:3000/api/v1/deposits \
@@ -106,7 +125,7 @@ Successful response:
 ## Withdrawal
 
 ```bash
-curl -b tmp/cookies.txt \
+curl -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: withdrawal-001" \
   -X POST http://localhost:3000/api/v1/withdrawals \
@@ -135,7 +154,7 @@ Batch deposits accept up to 100 items. The create endpoint stores a
 `BatchOperation` and enqueues `BatchDepositJob`.
 
 ```bash
-curl -b tmp/cookies.txt \
+curl -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: batch-deposit-001" \
   -X POST http://localhost:3000/api/v1/batch_deposits \
@@ -171,7 +190,7 @@ Accepted response:
 Poll for results:
 
 ```bash
-curl -b tmp/cookies.txt \
+curl -H "Authorization: Bearer $TOKEN" \
   http://localhost:3000/api/v1/batch_deposits/42
 ```
 
@@ -231,7 +250,7 @@ bin/rails wallet:demo
 The task creates a demo tenant, user, and USD account if needed, then uses
 `Net::HTTP` to call:
 
-- `POST /session`
+- `POST /session` to get a JWT
 - `POST /api/v1/deposits`
 - `POST /api/v1/withdrawals`
 - `POST /api/v1/batch_deposits`

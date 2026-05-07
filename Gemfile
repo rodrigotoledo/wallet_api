@@ -43,9 +43,13 @@ group :development, :test do
 
   # Omakase Ruby styling [https://github.com/rails/rubocop-rails-omakase/]
   gem "rubocop-rails-omakase", require: false
+  gem 'guard'
+  gem 'guard-minitest'
 end
 
 gem "redis"
 gem "jwt"                    # autenticação
 gem "sidekiq"                # background jobs (batch + cleanup)
 gem "sidekiq-cron"           # cron jobs
+gem 'acts_as_tenant'
+gem 'jsonapi-serializer'

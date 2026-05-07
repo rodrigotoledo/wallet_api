@@ -3,7 +3,7 @@ module Authentication
 
   included do
     before_action :require_authentication
-    before_action :set_tenant
+    before_action :set_acts_as_tenant_current_tenant
     helper_method :authenticated?, :current_user, :current_tenant
   end
 
@@ -30,8 +30,8 @@ module Authentication
       Current.user ||= find_user_from_jwt if jwt_token.present?
     end
 
-    def set_tenant
-      Current.tenant = current_user.tenant if current_user
+    def set_acts_as_tenant_current_tenant
+      ActsAsTenant.current_tenant = current_user&.tenant
     end
 
     def current_user
@@ -39,7 +39,7 @@ module Authentication
     end
 
     def current_tenant
-      Current.tenant
+      ActsAsTenant.current_tenant
     end
 
     def find_session_by_cookie
@@ -47,7 +47,7 @@ module Authentication
     end
 
     def jwt_token
-      request.headers['Authorization']&.split(' ')&.last
+      request.headers["Authorization"]&.split(" ")&.last
     end
 
     def find_user_from_jwt

@@ -3,13 +3,16 @@ Rails.application.routes.draw do
 
   get "session/new", to: "sessions#new", as: :new_session
   resource :session
+  resources :registrations, only: :create
   resources :passwords, param: :token
 
   namespace :api do
     namespace :v1 do
+      resource :profile, only: :show
       resources :deposits, only: :create
       resources :withdrawals, only: :create
       resources :batch_deposits, only: %i[create show]
+      resources :transactions, only: :index
     end
   end
   # Define your application routes per the DSL in https://guides.rubyonrails.org/routing.html

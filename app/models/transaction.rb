@@ -1,5 +1,6 @@
 class Transaction < ApplicationRecord
-  belongs_to :tenant
+  acts_as_tenant :tenant
+
   belongs_to :account
   belongs_to :user
 

@@ -1,5 +1,5 @@
 class SessionsController < ApplicationController
-  allow_unauthenticated_access only: %i[ new create ]
+  allow_unauthenticated_access only: %i[new create]
   rate_limit to: 10, within: 3.minutes, only: :create, with: -> { redirect_to new_session_path, alert: "Try again later." }
 
   def new
@@ -13,11 +13,8 @@ class SessionsController < ApplicationController
           token: JwtService.encode(user),
           token_type: "Bearer",
           expires_in: JwtService::EXPIRATION.to_i,
-          user: {
-            id: user.id,
-            email_address: user.email_address,
-            tenant_id: user.tenant_id
-          }
+          user: user_json(user),
+          tenant: tenant_json(user.tenant)
         }, status: :created
       else
         start_new_session_for user
@@ -38,5 +35,27 @@ class SessionsController < ApplicationController
   def destroy
     terminate_session
     redirect_to new_session_path, status: :see_other
+  end
+
+  private
+
+  def user_json(user)
+    account = user.account
+
+    {
+      id: user.id,
+      email_address: user.email_address,
+      tenant_id: user.tenant_id,
+      balance: account&.balance.to_f,
+      currency: account&.currency || "USD"
+    }
+  end
+
+  def tenant_json(tenant)
+    {
+      id: tenant.id,
+      name: tenant.name,
+      subdomain: tenant.subdomain
+    }
   end
 end
