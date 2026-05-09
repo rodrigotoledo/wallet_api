@@ -44,7 +44,10 @@ group :development, :test do
   # Omakase Ruby styling [https://github.com/rails/rubocop-rails-omakase/]
   gem "rubocop-rails-omakase", require: false
   gem 'guard'
-  gem 'guard-minitest'
+  gem 'guard-rspec', require: false
+  gem 'rspec-rails', '~> 8.0.0'
+  gem 'factory_bot_rails'
+  gem 'simplecov', require: false
 end
 
 gem "redis"
