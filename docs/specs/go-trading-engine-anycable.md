@@ -17,7 +17,7 @@ Premissas explícitas desta spec (decisões já fechadas):
 1. **Projeto à parte:** o serviço Go **não** vive dentro do repositório do Wallet API. É um repositório/projeto independente (ex.: `wallet-trading-engine`), com seu próprio `go.mod`, ciclo de versão, CI e imagem Docker. O Wallet API apenas **consome** esse serviço (via HTTP) e **compartilha** o canal de broadcast do AnyCable.
 2. **Echo:** a camada HTTP do serviço Go usa **`github.com/labstack/echo/v4`** (endpoints de ingestão de ordens, health e métricas).
 3. **AnyCable:** o serviço Go publica o resultado da execução no **backend de broadcast do AnyCable** (Redis), e o `anycable-go` entrega ao cliente WebSocket — **sem round-trip pelo Rails**.
-4. **Docker:** o serviço Go é distribuído como **imagem Docker própria** e referenciado pelo `docker-compose` do Wallet API.
+4. **Docker:** o serviço Go é distribuído como **imagem Docker própria** e tem o **seu próprio `docker-compose` (stack independente)**. Ele **não** é embutido no compose do Rails; em vez disso, conecta-se à **rede externa compartilhada `wallet_shared`** (definida na spec do AnyCable/serviços) para enxergar Postgres, Redis e o broadcast do AnyCable. Ou seja: stack de **serviços compartilhados** separada, e **cada projeto** (Rails, Go) com seu próprio docker/compose que enxerga esses serviços.
 
 Em uma frase: *Rails recebe a ordem (REST) → chama o serviço Go (Echo, HTTP) → Go executa/liquida com concorrência → publica o resultado no AnyCable → a tela do usuário atualiza sozinha.*
 
@@ -242,31 +242,57 @@ end
 
 ---
 
-## 11. Docker
+## 11. Docker (stacks separadas)
 
-### 11.1 Imagem do projeto Go (no repo `wallet-trading-engine`)
-- `Dockerfile` multi-stage: `golang:1.23` (build) → imagem `distroless/static` ou `scratch` (runtime), binário estático, usuário não-root, `EXPOSE 8090`.
+> **Topologia (alinhada com `docs/specs/anycable-rpc-docker-compose.md` §6):** há um `docker-compose` **exclusivo de serviços compartilhados** (Postgres, Redis, `anycable-go`) que cria/possui a rede externa **`wallet_shared`**. **Cada projeto tem o seu próprio `docker-compose` + `Dockerfile`** e se conecta a essa rede para enxergar os serviços. O `trading-engine` é uma **stack própria** (no repo Go), **não** um serviço dentro do compose do Rails.
+
+### 11.1 Visão geral
+```
+   STACK services (infra)  →  db / redis / anycable-go     [rede: wallet_shared]
+            ▲                         ▲
+            │ wallet_shared           │ wallet_shared
+   STACK wallet-api (Rails)    STACK trading-engine (Go/Echo)
+     web / rpc / sidekiq          trading-engine :8090
+```
+- `trading-engine` alcança `db`/`redis` pelos nomes da rede `wallet_shared` (Postgres p/ liquidar, Redis `/2` p/ broadcast AnyCable).
+- `web`/`sidekiq` (stack Rails) alcançam o `trading-engine` por `http://trading-engine:8090` na mesma rede.
+
+### 11.2 Imagem do projeto Go (no repo `wallet-trading-engine`)
+- `Dockerfile` multi-stage: `golang:1.23` (build) → `distroless/static` ou `scratch` (runtime), binário estático, usuário não-root, `EXPOSE 8090`.
 - Publicada num registry (ex.: `ghcr.io/<org>/wallet-trading-engine:<tag>`).
 
-### 11.2 Referência no `docker-compose.yml` do Wallet API
-Adicionar o serviço (da spec anterior do compose):
+### 11.3 `docker-compose.yml` próprio do `trading-engine` (no repo Go)
 
 | Serviço | Imagem/build | Porta | Papel |
 | --- | --- | --- | --- |
-| `trading-engine` | `image: ghcr.io/<org>/wallet-trading-engine:<tag>` **ou** `build: ../wallet-trading-engine` | 8090 | Echo: ingestão + execução + liquidação + broadcast |
+| `trading-engine` | `build: .` (repo Go) ou `image: ghcr.io/<org>/wallet-trading-engine:<tag>` | 8090 | Echo: ingestão + execução + liquidação + broadcast |
 
-- Como é **projeto à parte**, há duas formas de uso no compose:
-  - **Imagem publicada** (recomendado): `image: ...` — não precisa do código-fonte ao lado.
-  - **Build context externo** (dev local): `build: { context: ../wallet-trading-engine }` assumindo os repos lado a lado (ou git submodule).
-- Variáveis: `DATABASE_URL=postgres://postgres:postgres@db:5432/wallet_api_development`, `ANYCABLE_BROADCAST_REDIS_URL=redis://redis:6379/2`, `TRADING_CONCURRENCY`, `INTERNAL_TOKEN` (igual no Rails), `PORT=8090`.
-- `depends_on`: `db` (healthy), `redis` (healthy).
-- `web`/`sidekiq` ganham `TRADING_ENGINE_URL=http://trading-engine:8090` e `INTERNAL_TOKEN`.
+```yaml
+services:
+  trading-engine:
+    build: .          # ou image: ghcr.io/<org>/wallet-trading-engine:<tag>
+    ports: ["8090:8090"]
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/wallet_api_development
+      ANYCABLE_BROADCAST_REDIS_URL: redis://redis:6379/2
+      TRADING_CONCURRENCY: "8"
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      PORT: "8090"
+    networks: [wallet_shared]
+networks:
+  wallet_shared:
+    external: true     # criada/owned pela stack de serviços
+```
+
+- **Não há `db`/`redis` aqui** — vêm da stack `services` via `wallet_shared`.
+- **`depends_on` não cruza stacks:** o entrypoint do `trading-engine` deve fazer wait/retry de Postgres/Redis. Ordem de subida: `services` → `trading-engine` (e `wallet-api`).
+- A stack do **Rails** (`web`/`sidekiq`) recebe `TRADING_ENGINE_URL=http://trading-engine:8090` e `INTERNAL_TOKEN` (mesmo segredo) para chamar o serviço pela rede compartilhada.
 
 ---
 
 ## 12. Critérios de aceitação
 
-1. `docker compose up` (Wallet API) sobe o `trading-engine` (imagem/build do projeto à parte) saudável (`GET /health` 200).
+1. Com a stack de **serviços** no ar (`db`/`redis`/`anycable-go` na rede `wallet_shared`), `docker compose up` na stack própria do `trading-engine` sobe o serviço saudável (`GET /health` 200), enxergando Postgres/Redis compartilhados.
 2. `POST /api/v1/trade_orders` cria `TradeOrder(pending)`, retorna `202` + `trade_order_id` e o Rails chama o Echo (`POST /trade_orders`) com sucesso.
 3. O serviço Go executa, liquida no Postgres (saldos das contas mudam corretamente) e marca `executed`/`rejected`.
 4. Um cliente WS inscrito em `TradeOrdersChannel` recebe `trade.executed`/`rejected` **em tempo real**, sem polling, com saldo atualizado.
@@ -320,7 +346,7 @@ Adicionar o serviço (da spec anterior do compose):
 | `config/routes.rb` | `resources :trade_orders, only: %i[create show]` |
 | `app/services/trading_engine_client.rb` | **novo** (HTTP `POST /trade_orders` no Echo) |
 | `app/channels/trade_orders_channel.rb` | **novo** (realtime) |
-| `docker-compose.yml`, `.env.example` | add serviço `trading-engine` (imagem/build externo) + envs |
+| `docker-compose.yml`, `.env.example` | `web`/`sidekiq` ganham `TRADING_ENGINE_URL`/`INTERNAL_TOKEN` (o `trading-engine` é stack à parte, **não** um serviço aqui) |
 | `spec/requests/api/v1/trade_orders_spec.rb`, `spec/channels/trade_orders_channel_spec.rb` | **novos** |
 | `README.md`, `AGENTS.md` | docs |
 
@@ -329,7 +355,7 @@ Adicionar o serviço (da spec anterior do compose):
 | --- | --- |
 | `go.mod`, `cmd/server/main.go` | **novo** (bootstrap Echo) |
 | `internal/http`, `internal/engine`, `internal/settlement`, `internal/broadcast`, `internal/config` | **novos** pacotes |
-| `Dockerfile`, CI | **novos** |
+| `Dockerfile`, `docker-compose.yml` (stack própria, rede `wallet_shared` externa), CI | **novos** |
 | `*_test.go` | **novos** testes |
 
 ---
