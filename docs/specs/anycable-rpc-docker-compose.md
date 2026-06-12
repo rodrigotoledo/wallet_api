@@ -1,4 +1,4 @@
-# Spec de Feature: Migrar Action Cable para AnyCable (RPC) + Docker Compose
+# Spec de Feature: Migrar Action Cable para AnyCable (RPC) + Docker Compose (múltiplas stacks)
 
 - **Status:** Proposta (spec, sem implementação ainda)
 - **Autor:** Cloud Agent
@@ -10,9 +10,9 @@
 ## 1. Objetivo
 
 1. **Trocar a camada de conexões WebSocket do Rails (Action Cable in-process) por AnyCable**, em que o servidor WebSocket roda em um processo Go (`anycable-go`) e se comunica com o app Rails via **gRPC (RPC)**.
-2. **Adicionar um `docker-compose.yml`** que sobe todo o stack de desenvolvimento — Postgres, Redis, o servidor web (Puma), o servidor RPC do AnyCable (Rails), o `anycable-go` (WebSocket) e o Sidekiq — com um único `docker compose up`.
+2. **Definir a topologia Docker em stacks separadas** (ver §6), com um **`docker-compose` exclusivo para a estrutura de serviços compartilhados** (Postgres, Redis, `anycable-go`) e um **`docker-compose` próprio do projeto Rails** (web/Puma, RPC AnyCable, Sidekiq) que **enxerga** os serviços compartilhados via uma **rede Docker externa compartilhada**.
 
-Resultado esperado: um cliente WebSocket conecta em `ws://localhost:8080/cable`, autentica, assina um canal e recebe atualizações em tempo real (ex.: mudança de saldo após um depósito), com toda a infra orquestrada por Docker Compose.
+Resultado esperado: um cliente WebSocket conecta em `ws://localhost:8080/cable`, autentica, assina um canal e recebe atualizações em tempo real (ex.: mudança de saldo após um depósito). A infra de serviços sobe na sua própria stack e os projetos (Rails — e futuramente o trading-engine Go) sobem em stacks próprias que dependem dela.
 
 ---
 
@@ -41,7 +41,7 @@ Resultado esperado: um cliente WebSocket conecta em `ws://localhost:8080/cable`,
 - Configurar o broadcast adapter para `redis` (pub/sub) e o `cable.yml` para `any_cable`.
 - Garantir compatibilidade do `ApplicationCable::Connection` com AnyCable.
 - Criar **um canal de demonstração** ligado ao domínio (ex.: `AccountChannel`/`TransactionsChannel`) para validar broadcast ponta a ponta.
-- Criar `docker-compose.yml` (dev) + um `Dockerfile.dev` (ou alvo de build dev) com todos os serviços.
+- Criar a **stack de serviços compartilhados** (`services/docker-compose.yml`: Postgres, Redis, `anycable-go`) + a **stack do projeto Rails** (`docker-compose.yml`: web, rpc, sidekiq) + um `Dockerfile.dev` do Rails, conectadas por uma **rede externa compartilhada** (ver §6).
 - Variáveis de ambiente / `.env.example`.
 - Testes (adapter de teste do AnyCable + specs de canal/conexão).
 - Atualizar `README.md` e `AGENTS.md` com os comandos novos.
@@ -174,37 +174,79 @@ end
 
 ---
 
-## 6. Docker Compose (dev)
+## 6. Topologia Docker (stacks separadas)
 
-### 6.1 `Dockerfile.dev` (novo)
-O `Dockerfile` atual é só produção (non-root, `RAILS_ENV=production`, sem dev gems). Criar um alvo/arquivo de dev:
+> **Decisão estrutural:** a infraestrutura de serviços compartilhados fica em um **`docker-compose` próprio e separado**, e **cada projeto** (Rails agora; trading-engine Go depois) tem o **seu próprio `docker-compose` + `Dockerfile`**. As stacks dos projetos **não embutem** Postgres/Redis/AnyCable — elas **enxergam** esses serviços através de uma **rede Docker externa compartilhada**. Ou seja, os projetos **dependem** da stack de serviços, mas são independentes entre si.
+
+### 6.1 Visão geral das stacks
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  STACK: services   →  services/docker-compose.yml  (infra compartilhada)│
+│  cria/possui a rede externa:  wallet_shared                            │
+│   • db            postgres:16            :5432                         │
+│   • redis         redis:7                :6379  (/0 idem, /1 sidekiq, /2 anycable)│
+│   • anycable-go   anycable/anycable-go   :8080  (WS; RPC_HOST=rpc:50051)│
+└───────────────▲────────────────────────────────────▲──────────────────┘
+                │ rede wallet_shared                   │ rede wallet_shared
+   ┌────────────┴───────────────────┐      ┌───────────┴───────────────────────┐
+   │ STACK: wallet-api (este repo)   │      │ STACK: trading-engine (repo Go)    │
+   │ docker-compose.yml + Dockerfile.dev    │ (spec go-trading-engine-anycable)  │
+   │   • web      Puma   :3000       │      │   • trading-engine  Echo  :8090    │
+   │   • rpc      anycable RPC :50051│      │                                    │
+   │   • sidekiq                     │      │                                    │
+   └─────────────────────────────────┘      └────────────────────────────────────┘
+```
+
+- **`anycable-go` (na stack de serviços)** precisa alcançar o **`rpc` (na stack do Rails)** via gRPC. Como ambos estão na rede `wallet_shared`, o DNS interno do Docker resolve `rpc:50051`. (É uma dependência services→app legítima, viabilizada pela rede compartilhada.)
+- **Rails (`web`/`rpc`/`sidekiq`)** alcança `db`, `redis` (e o broadcast do AnyCable) pelos nomes `db`/`redis` na mesma rede.
+
+### 6.2 Rede externa compartilhada
+- Criada uma vez: `docker network create wallet_shared` **ou** declarada/owned pela stack `services` (`networks: { wallet_shared: { name: wallet_shared } }`).
+- Referenciada pelas stacks dos projetos como **`external: true`**:
+```yaml
+networks:
+  wallet_shared:
+    external: true
+```
+- Todos os serviços de todas as stacks declaram `networks: [wallet_shared]` para se enxergarem por DNS.
+
+### 6.3 Stack de serviços — `services/docker-compose.yml` (novo)
+
+| Serviço | Imagem | Porta | Papel |
+| --- | --- | --- | --- |
+| `db` | `postgres:16` | 5432 | Banco (user/pass `postgres`); volume nomeado |
+| `redis` | `redis:7` | 6379 | Idempotência (`/0`), Sidekiq (`/1`), AnyCable (`/2`) |
+| `anycable-go` | `anycable/anycable-go:latest` | 8080 | Servidor WebSocket Go |
+
+- Healthchecks em `db` (`pg_isready`) e `redis` (`redis-cli ping`).
+- Variáveis do `anycable-go`: `ANYCABLE_HOST=0.0.0.0`, `ANYCABLE_PORT=8080`, `ANYCABLE_RPC_HOST=rpc:50051`, `ANYCABLE_REDIS_URL=redis://redis:6379/2`, `ANYCABLE_BROADCAST_ADAPTER=redisx`, `ANYCABLE_ALLOWED_ORIGINS=*` (dev).
+- Esta stack **sobe primeiro** (`docker compose -f services/docker-compose.yml up`).
+
+### 6.4 `Dockerfile.dev` do Rails (novo)
+O `Dockerfile` atual é só produção (non-root, `RAILS_ENV=production`, sem dev gems). Criar um arquivo de dev:
 - Base `ruby:4.0.2-slim`.
 - Instalar `build-essential libpq-dev libvips libyaml-dev pkg-config git`.
 - `bundle install` **com** grupos `development`/`test`.
 - `RAILS_ENV=development`, sem precompile de bootsnap obrigatório.
 
-### 6.2 `docker-compose.yml` (novo) — serviços
+### 6.5 Stack do Rails — `docker-compose.yml` (novo, neste repo)
 
-| Serviço | Imagem / build | Porta | Papel |
+| Serviço | Build | Porta | Papel |
 | --- | --- | --- | --- |
-| `db` | `postgres:16` | 5432 | Banco (user/pass `postgres`) |
-| `redis` | `redis:7` | 6379 | Idempotência (`/0`), Sidekiq (`/1`), AnyCable (`/2`) |
-| `web` | build `Dockerfile.dev` | 3000 | Puma — API REST (`bin/rails server`) |
-| `rpc` | build `Dockerfile.dev` | 50051 | Servidor RPC AnyCable (`bundle exec anycable`) |
-| `ws` | `anycable/anycable-go:latest` | 8080 | Servidor WebSocket Go |
-| `sidekiq` | build `Dockerfile.dev` | — | Jobs (batch/transfer/cleanup) |
+| `web` | `Dockerfile.dev` | 3000 | Puma — API REST (`bin/rails server`) |
+| `rpc` | `Dockerfile.dev` | 50051 | Servidor RPC AnyCable (`bundle exec anycable --rpc-host=0.0.0.0:50051`) |
+| `sidekiq` | `Dockerfile.dev` | — | Jobs (batch/transfer/cleanup) |
 
-Pontos-chave do compose:
-- `depends_on` com `condition: service_healthy` (healthchecks em `db`, `redis`, `rpc`).
-- Variáveis para o `ws` (anycable-go): `ANYCABLE_HOST=0.0.0.0`, `ANYCABLE_PORT=8080`, `ANYCABLE_RPC_HOST=rpc:50051`, `ANYCABLE_REDIS_URL=redis://redis:6379/2`, `ANYCABLE_BROADCAST_ADAPTER=redisx`.
-- Variáveis para `web`/`rpc`/`sidekiq`: `DATABASE_URL=postgres://postgres:postgres@db:5432`, `REDIS_URL=redis://redis:6379/0`, `ANYCABLE_REDIS_URL=redis://redis:6379/2`, `RAILS_ENV=development`, **`SECRET_KEY_BASE` compartilhado** entre `web` e `rpc`.
-- `rpc` command: `bundle exec anycable --rpc-host=0.0.0.0:50051`.
-- Volume do código para hot-reload em dev; volume nomeado para `postgres` e `bundle`.
-- Healthcheck do `rpc`: `anycable health` (ou checagem de porta gRPC).
-- Migração inicial: o entrypoint do `web` roda `bin/rails db:prepare` (idempotente).
+Pontos-chave:
+- **Não há `db`/`redis`/`ws` aqui** — vêm da stack `services` via `wallet_shared`.
+- Variáveis para `web`/`rpc`/`sidekiq`: `DATABASE_URL=postgres://postgres:postgres@db:5432/wallet_api_development`, `REDIS_URL=redis://redis:6379/0`, `ANYCABLE_REDIS_URL=redis://redis:6379/2`, `RAILS_ENV=development`, **`SECRET_KEY_BASE` compartilhado** entre `web` e `rpc`.
+- Volume do código para hot-reload; volume nomeado para `bundle`.
+- Healthcheck do `rpc`: `anycable health` (ou checagem da porta gRPC).
+- **Sem `depends_on` cruzando stacks:** `depends_on`/`condition: service_healthy` não funciona entre composes diferentes. O entrypoint do `web`/`rpc` deve **aguardar** Postgres/Redis (retry/wait-for) antes de `bin/rails db:prepare`. Documentar a ordem: subir `services` → depois `wallet-api`.
 
-### 6.3 `.env.example` (novo)
-Documentar todas as variáveis acima.
+### 6.6 `.env.example` (novo)
+Documentar todas as variáveis acima e o nome da rede (`wallet_shared`).
 
 ---
 
@@ -229,7 +271,7 @@ O gem roda um **RuboCop de compatibilidade** (`AnyCable/InstanceVars`, `AnyCable
 
 ## 9. Critérios de aceitação
 
-1. `docker compose up` sobe `db`, `redis`, `web`, `rpc`, `ws`, `sidekiq` — todos saudáveis.
+1. `docker compose -f services/docker-compose.yml up` sobe `db`, `redis`, `anycable-go` (saudáveis) e cria a rede `wallet_shared`; em seguida `docker compose up` (stack Rails) sobe `web`, `rpc`, `sidekiq` enxergando os serviços compartilhados.
 2. `GET http://localhost:3000/up` → 200 (web continua funcionando).
 3. Um cliente WS conecta em `ws://localhost:8080/cable` com JWT válido, assina `AccountChannel` e a conexão é aceita; JWT inválido → conexão rejeitada.
 4. Um `POST /api/v1/deposits` (ou processamento de batch) dispara um broadcast que o cliente WS recebe com o novo saldo.
@@ -244,7 +286,7 @@ O gem roda um **RuboCop de compatibilidade** (`AnyCable/InstanceVars`, `AnyCable
   - `spec/channels/account_channel_spec.rb` — subscribe/reject + broadcast.
   - `spec/channels/connection_spec.rb` — auth JWT aceita/rejeita.
 - **Integração manual (ponta a ponta):**
-  1. `docker compose up`.
+  1. `docker compose -f services/docker-compose.yml up` (infra) e depois `docker compose up` (Rails).
   2. Obter JWT via `POST /session` (seeds: `alice@demo.com` / `password123`).
   3. Conectar com `wscat`/`websocat`: `websocat "ws://localhost:8080/cable?jwt=$TOKEN"` e enviar a mensagem de `subscribe`.
   4. Disparar `POST /api/v1/deposits` e confirmar a mensagem de broadcast no cliente WS.
@@ -256,7 +298,7 @@ O gem roda um **RuboCop de compatibilidade** (`AnyCable/InstanceVars`, `AnyCable
 
 1. **Gem + config base:** adicionar `anycable-rails`, rodar `bin/rails g anycable:setup` (gera `config/anycable.yml`, ajusta `cable.yml`), revisar.
 2. **Conexão + canal demo:** auth JWT na `Connection`, `AccountChannel`, pontos de broadcast.
-3. **Docker:** `Dockerfile.dev`, `docker-compose.yml`, `.env.example`, entrypoint com `db:prepare`.
+3. **Docker (stacks separadas):** `services/docker-compose.yml` (db, redis, anycable-go + rede `wallet_shared`), `Dockerfile.dev`, `docker-compose.yml` do Rails (web, rpc, sidekiq na rede externa), `.env.example`, entrypoint com wait-for + `db:prepare`.
 4. **Testes:** specs de canal/conexão + ajuste do `spec/rails_helper.rb` para o modo de teste do AnyCable.
 5. **Docs:** `README.md` (seção "Realtime com AnyCable" + "Docker Compose") e `AGENTS.md` (como subir o stack/portas).
 6. **Validação:** rodar os critérios de aceitação (§9) e anexar evidências.
@@ -267,6 +309,8 @@ O gem roda um **RuboCop de compatibilidade** (`AnyCable/InstanceVars`, `AnyCable
 
 - **Redis passa a ser obrigatório em dev** para o realtime (hoje o cable dev é `async`, in-process). O REST continua funcionando sem Redis, mas o WebSocket não.
 - **Dois processos Rails** (web + rpc) compartilhando código/migrações; manter `SECRET_KEY_BASE` e versões de schema sincronizados.
+- **`depends_on` não cruza stacks de compose:** a ordem (services → projetos) é manual/documentada e os entrypoints dos apps precisam de wait/retry para Postgres/Redis. A rede `wallet_shared` precisa existir antes das stacks dos projetos (criada pela stack `services` ou via `docker network create`).
+- **Acoplamento via rede + nomes de host:** os apps assumem os hostnames `db`/`redis`/`rpc`/`anycable-go` na rede compartilhada; mudanças de nome quebram a integração entre stacks.
 - **Produção (Kamal)** precisará de um serviço `anycable-go` e do processo `rpc` separados — **fora do escopo** desta spec, mas deixar o `cable.yml` de produção pronto (`any_cable`) para a evolução futura.
 - **Paridade de features** do Action Cable: validar com o RuboCop de compatibilidade antes de adicionar canais complexos.
 - **CORS/Origin** no `anycable-go`: liberar somente em dev.
@@ -283,8 +327,9 @@ O gem roda um **RuboCop de compatibilidade** (`AnyCable/InstanceVars`, `AnyCable
 | `app/channels/application_cable/connection.rb` | auth JWT (+fallback cookie) |
 | `app/channels/account_channel.rb` | **novo** (canal demo) |
 | `app/services/*`, `app/sidekiq/batch_deposit_job.rb` | pontos de `broadcast_to` |
-| `Dockerfile.dev` | **novo** (imagem de dev) |
-| `docker-compose.yml` | **novo** (db, redis, web, rpc, ws, sidekiq) |
+| `Dockerfile.dev` | **novo** (imagem de dev do Rails) |
+| `services/docker-compose.yml` | **novo** (stack de serviços: db, redis, anycable-go + rede `wallet_shared`) |
+| `docker-compose.yml` | **novo** (stack do Rails: web, rpc, sidekiq; usa rede externa `wallet_shared`) |
 | `.env.example` | **novo** |
 | `spec/channels/*` | **novos** specs |
 | `README.md`, `AGENTS.md` | docs |
